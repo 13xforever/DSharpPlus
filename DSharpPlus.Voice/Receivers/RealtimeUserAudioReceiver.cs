@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO.Pipelines;
 using System.Threading;
+using System.Threading.Tasks;
 
 using CommunityToolkit.HighPerformance;
 
@@ -48,7 +49,7 @@ internal sealed class RealtimeUserAudioReceiver : UserAudioReceiver
             {
                 List<(AudioTimestamp, byte[])> packets = [];
 
-                for (ushort i = (ushort)(this.lastWrittenSequence + 1); i <= this.highestReceivedSequence; i++)
+                for (uint i = this.lastWrittenSequence + 1; i <= this.highestReceivedSequence; i++)
                 {
                     if (i == sequence)
                     {
@@ -61,8 +62,7 @@ internal sealed class RealtimeUserAudioReceiver : UserAudioReceiver
                     else
                     {
                         // we have a hole
-                        this.queuedPackets.Add(sequence, (timestamp, audio));
-                        this.highestReceivedSequence = sequence;
+                        this.queuedPackets[sequence] = (timestamp, audio);
                         return;
                     }
                 }
@@ -71,6 +71,8 @@ internal sealed class RealtimeUserAudioReceiver : UserAudioReceiver
                 {
                     this.decoder.Decode(audioPacket, new PipeWriterInt16BufferWriter(this.pipe.Writer));
                 }
+
+                FlushPipe();
 
                 this.lastWrittenSequence = sequence;
                 this.highestReceivedSequence = sequence;
@@ -111,8 +113,13 @@ internal sealed class RealtimeUserAudioReceiver : UserAudioReceiver
             this.highestReceivedSequence = sequence;
         }
 
+        FlushPipe();
+
         this.lastTimestamp = timestamp;
     }
+
+    private void FlushPipe()
+        => _ = this.pipe.Writer.FlushAsync();
 
     /// <inheritdoc />
     protected internal override void Close() 

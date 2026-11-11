@@ -14,6 +14,9 @@ namespace DSharpPlus.Voice.Protocol.RTCP;
 /// </summary>
 internal static partial class RTCPSerializer
 {
+    private const byte VersionMask = 0b1100_0000;
+    private const byte RtpVersion = 0b1000_0000;
+    
     public static void Serialize(IRTCPPacket packet, ArrayPoolBufferWriter<byte> writer)
     {
         switch (packet.Type)
@@ -50,24 +53,37 @@ internal static partial class RTCPSerializer
         // 4 is the absolute minimum length of a valid RTCP packet, even if it's not meaningful
         while (buffer.Length >= 4)
         {
+            if ((buffer[0] & VersionMask) != RtpVersion)
+            {
+                break;
+            }
+
             ushort specifiedLength = BinaryPrimitives.ReadUInt16BigEndian(buffer[2..]);
             int effectiveLength = (specifiedLength + 1) * 4;
 
-            ReadOnlySpan<byte> packet = buffer[..effectiveLength];
-            int consumed;
+            if (effectiveLength > buffer.Length)
+            {
+                break;
+            }
 
-            IRTCPPacket deserialized = (RTCPPacketType)packet[1] switch
+            ReadOnlySpan<byte> packet = buffer[..effectiveLength];
+            int consumed = effectiveLength;
+
+            IRTCPPacket? deserialized = (RTCPPacketType)packet[1] switch
             {
                 RTCPPacketType.SenderReport => DeserializeSenderReport(packet, out consumed),
                 RTCPPacketType.ReceiverReport => DeserializeReceiverReport(packet, out consumed),
                 RTCPPacketType.SourceDescription => DeserializeSourceDescription(packet, out consumed),
                 RTCPPacketType.Goodbye => DeserializeGoodbye(packet, out consumed),
                 RTCPPacketType.ApplicationDefined => DeserializeApplicationDefinedPacket(packet, out consumed),
-                _ => throw new NotImplementedException($"The RTCP packet type {(RTCPPacketType)packet[1]} is not supported.")
+                _ => null
             };
 
-            Debug.Assert(consumed == effectiveLength);
-            packets.Add(deserialized);
+            if (deserialized is not null)
+            {
+                Debug.Assert(consumed == effectiveLength);
+                packets.Add(deserialized);
+            }
 
             buffer = buffer[effectiveLength..];
         }
@@ -84,7 +100,7 @@ internal static partial class RTCPSerializer
         }
 
         // invalid version
-        if ((buffer[0] & 0b1100_0000) != 0b1000_0000)
+        if ((buffer[0] & VersionMask) != RtpVersion)
         {
             return false;
         }

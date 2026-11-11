@@ -118,14 +118,15 @@ partial class VoiceConnection
             (uint normalizedSequence, ulong normalizedTimestamp) = voiceUser.UpdateTimestampAndSequence(frameInfo.Sequence, frameInfo.Timestamp);
 
             // handle rtp padding
-            int audioBytes = decryptedWriter.WrittenCount;
+            int payloadStart = frameInfo.ExtensionHeaderLength;
+            int audioBytes = decryptedWriter.WrittenCount - payloadStart;
 
-            if (BitHelper.HasFlag(receiveWriter.WrittenSpan[0], 3))
+            if (BitHelper.HasFlag(receiveWriter.WrittenSpan[0], 5))
             {
                 int paddingBytes = decryptedWriter.WrittenSpan[^1];
                 audioBytes -= paddingBytes;
 
-                if (audioBytes == 0)
+                if (audioBytes <= 0)
                 {
                     this.metrics.RecordEmptyAudioFrameReceived();
                     continue;
@@ -134,7 +135,7 @@ partial class VoiceConnection
 
             // the transport cryptor already is supposed to only decrypt the audio data (the header counts as additional data)
             byte[] audio = ArrayPool<byte>.Shared.Rent(audioBytes);
-            int finalDecryptedLength = this.e2ee.DecryptFrame(userId, decryptedWriter.WrittenSpan, audio);
+            int finalDecryptedLength = this.e2ee.DecryptFrame(userId, decryptedWriter.WrittenSpan[payloadStart..(payloadStart + audioBytes)], audio);
 
             // native returns 0 if it failed
             if (finalDecryptedLength == 0)
@@ -143,9 +144,10 @@ partial class VoiceConnection
                 continue;
             }
 
-            TimeSpan duration = this.codec.CalculatePacketLength(audio);
+            byte[] payload = audio[..finalDecryptedLength];
+            TimeSpan duration = this.codec.CalculatePacketLength(payload);
 
-            await this.Receiver.ProcessAudioAsync(frameInfo.SSRC, normalizedSequence, new(normalizedTimestamp), duration, audio[..finalDecryptedLength]);
+            await this.Receiver.ProcessAudioAsync(userId, normalizedSequence, new(normalizedTimestamp), duration, payload);
 
             ArrayPool<byte>.Shared.Return(audio);
         }
